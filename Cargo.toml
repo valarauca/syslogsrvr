@@ -1,0 +1,11 @@
+[package]
+name = "syslogsrvr"
+version = "0.1.0"
+authors = ["cody <codylaeder@gmail.com>"]
+
+[dependencies]
+clap = "2.31.1"
+tokio-core = "0.1"
+futures = "0.1"
+tokio-io = "0.1"
+bytes = "0.4"
