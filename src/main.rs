@@ -5,12 +5,11 @@ use futures::Async;
 use futures::future::lazy;
 
 extern crate tokio_core;
-use tokio_core::net::{TcpListener,TcpStream};
+use tokio_core::net::{UdpSocket,UdpCodec, UdpFramed};
 use tokio_core::reactor::{Core};
 
 extern crate tokio_io;
 use tokio_io::{AsyncRead,AsyncWrite};
-use tokio_io::codec::{Framed,LinesCodec};
 
 extern crate bytes;
 
@@ -54,55 +53,74 @@ fn main() {
     let handle1 = core.handle();
 
     // start listening
-    let listener = match TcpListener::bind(&socket, &handle0) {
-        Ok(x) => x,
+    let future = match UdpSocket::bind(&socket, &handle0) {
+        Ok(x) => DGramFuture{ data: x.framed(UdpGarabage::default()) },
         Err(e) => {
-            println!("Failed to start listening on {:?}", &socket);
+            println!("Failed to start listening on {:?} error {:?}", &socket, e);
             exit(1)
         }
     };
 
-    // construct a future
-    let server = listener.incoming().for_each(|(sock,addr)|{
-        handle1.spawn(
-            IRatherDislikeFutures::new(
-                addr, 
-                sock.framed(LinesCodec::new())));
-        Ok(())
-    });
+    match core.run(future) {
+        Ok(()) => {
+            println!("server exited");
+        }
+        Err(e) => {
+            println!("server exited {:?}", e)
+        }
+    };
 }
 
-struct IRatherDislikeFutures {
-    addr: SocketAddr,
-    stream: Framed<TcpStream,LinesCodec>
+struct DGramFuture {
+    data: UdpFramed<UdpGarabage>
 }
-impl IRatherDislikeFutures {
-    fn new(addr: SocketAddr, stream: Framed<TcpStream,LinesCodec>) -> Self {
-        println!("new connection {:?}", &addr);
-        IRatherDislikeFutures{ addr, stream }
-    }
-}
-impl Future for IRatherDislikeFutures {
+impl Future for DGramFuture {
     type Item = ();
     type Error = ();
     fn poll(&mut self) -> Result<Async<()>,()> {
-        match self.stream.poll() {
-            Ok(Async::Ready(Option::Some(x))) => {
-                println!("{}", x);
-                Ok(Async::NotReady)
-            }
-            Ok(Async::Ready(Option::None)) => {
-                println!("client {:?} closed", &self.addr);
-                Ok(Async::Ready(()))
-            }
-            Ok(Async::NotReady) => {
-                Ok(Async::NotReady)
-            }
-            Err(e) => {
-                println!("client {:?} returned error {:?}", &self.addr, e);
-                Err(())
-            }
+        loop {
+            match self.data.poll() {
+                Ok(Async::Ready(Option::None)) => {
+                    println!("closed");
+                    return Ok(Async::Ready(()));
+                },
+                Ok(Async::NotReady) => {
+                    continue;
+                },
+                Err(e) => {
+                    println!("closing error {:?}", e);
+                    return Err(());
+                },
+                Ok(Async::Ready(Option::Some(ref x))) => {
+                    println!("{:?}: {}", &x.addr, &x.message);
+                    return Ok(Async::NotReady);
+                },
+            };
         }
+    }
+}
+
+struct DGram {
+    addr: SocketAddr,
+    message: String,
+}
+struct UdpGarabage(());
+impl Default for UdpGarabage {
+    fn default() -> Self {
+        UdpGarabage(())
+    }
+}
+impl UdpCodec for UdpGarabage {
+    type In = DGram;
+    type Out = ();
+    fn decode(&mut self, src: &SocketAddr, buf: &[u8]) -> io::Result<DGram> {
+        Ok(DGram{
+            addr: src.clone(),
+            message: String::from_utf8_lossy(buf).to_string(),
+        })
+    }
+    fn encode(&mut self, msg: (), buf: &mut Vec<u8>) -> SocketAddr {
+        panic!("shouldn't be called")
     }
 }
 
